@@ -1,4 +1,6 @@
 import os
+import time
+import threading
 import telebot
 from telebot import types
 
@@ -6,7 +8,13 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "8646648924:AAGJsNgW_LdaFUU8K0AJha2GfPON
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "8520444725"))
 
 bot = telebot.TeleBot(BOT_TOKEN)
-user_data = {}
+
+# ذخیره اطلاعات کاربران
+user_data = {}          # {chat_id: {"plan": ..., "state": ...}}
+subscribed_users = set()  # کاربرانی که اشتراکشون تایید شده
+waiting_support = set()   # کاربرانی که منتظر نوشتن پیام پشتیبانی هستن
+waiting_card = set()      # کاربرانی که منتظر ارسال شماره کارت هستن
+
 
 # ---------- بررسی پشتیبانی از style ----------
 def make_button(text, callback_data, style=None):
@@ -22,28 +30,30 @@ def make_button(text, callback_data, style=None):
     return types.InlineKeyboardButton(text=text, callback_data=callback_data)
 
 
-# ---------- متن ها ----------
+# ---------- متن ها (بولد با HTML) ----------
 
-WELCOME_TEXT = """~ Wᴇʟᴄᴏᴍᴇ ᴛᴏ 𝐕ᴇxᴏʀ
-ᴠᴇxᴏʀ ɪꜱ ᴛʜᴇ ʟᴇᴀᴅɪɴɢ ᴘʟᴀᴛꜰᴏʀᴍ ꜰᴏʀ ʀᴀᴛ ꜱɪɢɴᴀᴛᴜʀᴇꜱ, ᴄᴀʀᴅ ꜱᴄᴀɴɴɪɴɢ, ᴀɴᴅ...
+WELCOME_TEXT = """<b>~ Wᴇʟᴄᴏᴍᴇ ᴛᴏ 𝐕ᴇxᴏʀ</b>
+<b>ᴠᴇxᴏʀ ɪꜱ ᴛʜᴇ ʟᴇᴀᴅɪɴɢ ᴘʟᴀᴛꜰᴏʀᴍ ꜰᴏʀ ʀᴀᴛ ꜱɪɢɴᴀᴛᴜʀᴇꜱ, ᴄᴀʀᴅ ꜱᴄᴀɴɴɪɴɢ, ᴀɴᴅ...</b>
 
-- ꜱᴇʟᴇᴄᴛ ʏᴏᴜʀ ᴅᴇꜱɪʀᴇᴅ ꜱᴇᴄᴛɪᴏɴ ꜰʀᴏᴍ ᴛʜᴇ ᴍᴇɴᴜ ʙᴇʟᴏᴡ."""
+<b>- ꜱᴇʟᴇᴄᴛ ʏᴏᴜʀ ᴅᴇꜱɪʀᴇᴅ ꜱᴇᴄᴛɪᴏɴ ꜰʀᴏᴍ ᴛʜᴇ ᴍᴇɴᴜ ʙᴇʟᴏᴡ.</b>"""
 
-NO_SUB_TEXT = """ʏᴏᴜ ᴅᴏ ɴᴏᴛ ʜᴀᴠᴇ ᴀɴ ᴀᴄᴛɪᴠᴇ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ !!
-ᴘʟᴇᴀꜱᴇ ꜱᴜʙꜱᴄʀɪʙᴇ ꜰɪʀꜱᴛ."""
+NO_SUB_TEXT = """<b>ʏᴏᴜ ᴅᴏ ɴᴏᴛ ʜᴀᴠᴇ ᴀɴ ᴀᴄᴛɪᴠᴇ ꜱᴜʙꜱᴄʀɪᴘᴛɪᴏɴ !!</b>
+<b>ᴘʟᴇᴀꜱᴇ ꜱᴜʙꜱᴄʀɪʙᴇ ꜰɪʀꜱᴛ.</b>"""
 
-PRICES_TEXT = """3 ᴅᴀʏ - 10 ᴛʀᴏɴ
+SIGNATURE_REPAIR_TEXT = "<b>این بخش درحال تعمیرات میباشد</b>"
 
-7 ᴅᴀʏ - 15 ᴛʀᴏɴ
+PRICES_TEXT = """<b>3 ᴅᴀʏ - 10 ᴛʀᴏɴ</b>
 
-14 ᴅᴀʏ - 30 ᴛʀᴏɴ
+<b>7 ᴅᴀʏ - 15 ᴛʀᴏɴ</b>
 
-21 ᴅᴀʏ - 45 ᴛʀᴏɴ
+<b>14 ᴅᴀʏ - 30 ᴛʀᴏɴ</b>
 
-60 ᴅᴀʏ - 60 ᴛʀᴏɴ
+<b>21 ᴅᴀʏ - 45 ᴛʀᴏɴ</b>
 
-ᴘʀɪᴄᴇꜱ ᴀʀᴇ ᴀᴅᴊᴜꜱᴛᴇᴅ ᴛᴏ ʏᴏᴜʀ ᴄᴜʀʀᴇɴᴛ ꜱɪᴛᴜᴀᴛɪᴏɴ ᴀɴᴅ ᴀʀᴇ ɴᴏᴛ ꜱᴏ ꜱᴘᴀᴄᴇ-ꜱᴀᴠɪɴɢ,
-ʜɪɢʜ Qᴜᴀʟɪᴛʏ, ʜɪɢʜ ꜱᴇᴄᴜʀɪᴛʏ, ꜰɪʀꜱᴛ ᴘᴏᴡᴇʀ"""
+<b>60 ᴅᴀʏ - 60 ᴛʀᴏɴ</b>
+
+<b>ᴘʀɪᴄᴇꜱ ᴀʀᴇ ᴀᴅᴊᴜꜱᴛᴇᴅ ᴛᴏ ʏᴏᴜʀ ᴄᴜʀʀᴇɴᴛ ꜱɪᴛᴜᴀᴛɪᴏɴ ᴀɴᴅ ᴀʀᴇ ɴᴏᴛ ꜱᴏ ꜱᴘᴀᴄᴇ-ꜱᴀᴠɪɴɢ,
+ʜɪɢʜ Qᴜᴀʟɪᴛʏ, ʜɪɢʜ ꜱᴇᴄᴜʀɪᴛʏ, ꜰɪʀꜱᴛ ᴘᴏᴡᴇʀ</b>"""
 
 WALLET = "TCSM67WSMgEGM44fV7eb4m7LqV6f23q84Z"
 
@@ -108,11 +118,95 @@ def admin_order_menu(user_id, plan_key):
     return kb
 
 
+def admin_support_menu(user_id):
+    kb = types.InlineKeyboardMarkup()
+    kb.row(
+        make_button("پاسخ", f"admin_reply_{user_id}", "primary"),
+    )
+    return kb
+
+
 # ---------- دستورات ----------
 
 @bot.message_handler(commands=['start'])
 def cmd_start(message):
-    bot.send_message(message.chat.id, WELCOME_TEXT, reply_markup=main_menu())
+    waiting_support.discard(message.chat.id)
+    waiting_card.discard(message.chat.id)
+    bot.send_message(
+        message.chat.id,
+        WELCOME_TEXT,
+        reply_markup=main_menu(),
+        parse_mode="HTML"
+    )
+
+
+# ---------- هندل پیام های متنی (کارت و پشتیبانی) ----------
+
+@bot.message_handler(content_types=['text'])
+def handle_text(message):
+    chat_id = message.chat.id
+    text = message.text.strip()
+
+    # --- حالت انتظار برای شماره کارت ---
+    if chat_id in waiting_card:
+        waiting_card.discard(chat_id)
+
+        # پیام "درحال اسکن"
+        bot.send_message(
+            chat_id,
+            "<b>درحال اسکن منتظر بمانید</b>",
+            parse_mode="HTML"
+        )
+
+        # تایمر ۵ دقیقه و ۳۰ ثانیه بعد پیام پیدا نشد
+        def scan_timeout():
+            time.sleep(330)  # 5.5 دقیقه
+            try:
+                bot.send_message(
+                    chat_id,
+                    "<b>اطلاعات کارت مورد نظر یافت نشد</b>",
+                    parse_mode="HTML",
+                    reply_markup=back_menu("back_main")
+                )
+            except Exception as e:
+                print("Scan timeout error:", e)
+
+        threading.Thread(target=scan_timeout, daemon=True).start()
+        return
+
+    # --- حالت انتظار برای پیام پشتیبانی ---
+    if chat_id in waiting_support:
+        waiting_support.discard(chat_id)
+
+        username = message.from_user.username or "بدون یوزرنیم"
+        full_name = message.from_user.full_name or "-"
+
+        admin_text = (
+            f"<b>پیام پشتیبانی جدید</b>\n\n"
+            f"<b>نام : {full_name}</b>\n"
+            f"<b>یوزرنیم : @{username}</b>\n"
+            f"<b>ایدی عددی : {chat_id}</b>\n\n"
+            f"<b>متن پیام :</b>\n"
+            f"<b>{text}</b>"
+        )
+
+        try:
+            bot.send_message(
+                ADMIN_ID,
+                admin_text,
+                parse_mode="HTML",
+                reply_markup=admin_support_menu(chat_id)
+            )
+        except Exception as e:
+            print("Admin support send error:", e)
+
+        bot.send_message(
+            chat_id,
+            "<b>پیام شما برای پشتیبانی ارسال شد</b>",
+            parse_mode="HTML",
+            reply_markup=back_menu("back_main")
+        )
+        return
 
 
 # ---------- Callback ها ----------
@@ -123,24 +217,65 @@ def handle_callback(call):
     chat_id = call.message.chat.id
     msg_id = call.message.message_id
 
-    # --- اسکن و ساینچر ---
-    if data in ("scan", "signature"):
+    # --- اسکن ---
+    if data == "scan":
+        if chat_id not in subscribed_users:
+            try:
+                bot.edit_message_text(
+                    NO_SUB_TEXT, chat_id, msg_id,
+                    reply_markup=back_menu("back_main"),
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+            bot.answer_callback_query(call.id)
+            return
+
+        waiting_card.add(chat_id)
         try:
             bot.edit_message_text(
-                NO_SUB_TEXT, chat_id, msg_id,
-                reply_markup=back_menu("back_main")
+                "<b>لطفا شماره کارت خود را ارسال کنید</b>",
+                chat_id, msg_id,
+                reply_markup=back_menu("back_main"),
+                parse_mode="HTML"
             )
         except Exception:
             pass
         bot.answer_callback_query(call.id)
 
-    # --- ساپورت ---
-    elif data == "support":
+    # --- امضا ---
+    elif data == "signature":
+        if chat_id not in subscribed_users:
+            try:
+                bot.edit_message_text(
+                    NO_SUB_TEXT, chat_id, msg_id,
+                    reply_markup=back_menu("back_main"),
+                    parse_mode="HTML"
+                )
+            except Exception:
+                pass
+            bot.answer_callback_query(call.id)
+            return
+
         try:
             bot.edit_message_text(
-                "𝐒𝐮𝐩𝐩𝐨𝐫𝐭 : @VexorSupport",
+                SIGNATURE_REPAIR_TEXT, chat_id, msg_id,
+                reply_markup=back_menu("back_main"),
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
+        bot.answer_callback_query(call.id)
+
+    # --- پشتیبانی ---
+    elif data == "support":
+        waiting_support.add(chat_id)
+        try:
+            bot.edit_message_text(
+                "<b>پیام خود را بنویسید</b>",
                 chat_id, msg_id,
-                reply_markup=back_menu("back_main")
+                reply_markup=back_menu("back_main"),
+                parse_mode="HTML"
             )
         except Exception:
             pass
@@ -151,7 +286,8 @@ def handle_callback(call):
         try:
             bot.edit_message_text(
                 PRICES_TEXT, chat_id, msg_id,
-                reply_markup=plans_menu()
+                reply_markup=plans_menu(),
+                parse_mode="HTML"
             )
         except Exception:
             pass
@@ -168,18 +304,18 @@ def handle_callback(call):
         user_data[chat_id] = {"plan": plan_key}
 
         text = (
-            f"~ ʏᴏᴜʀ ᴘʟᴀɴ : {plan['days']}\n"
-            f"ᴘʀɪᴄᴇ : {plan['price']}\n\n"
-            f"ᴡᴀʟʟᴇᴛ : `{WALLET}`\n\n"
-            f"اول واریزی رو انجام بدید و بعد بزنید روی پرداخت ، "
-            f"تراکنش شما در لحظه چک و خرید شما تایید میشه."
+            f"<b>~ ʏᴏᴜʀ ᴘʟᴀɴ : {plan['days']}</b>\n"
+            f"<b>ᴘʀɪᴄᴇ : {plan['price']}</b>\n\n"
+            f"<b>ᴡᴀʟʟᴇᴛ : <code>{WALLET}</code></b>\n\n"
+            f"<b>اول واریزی رو انجام بدید و بعد بزنید روی پرداخت ، "
+            f"تراکنش شما در لحظه چک و خرید شما تایید میشه.</b>"
         )
 
         try:
             bot.edit_message_text(
                 text, chat_id, msg_id,
                 reply_markup=payment_menu(),
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
         except Exception:
             pass
@@ -199,17 +335,18 @@ def handle_callback(call):
         full_name = call.from_user.full_name or "-"
 
         admin_text = (
-            f"سفارش جدید\n\n"
-            f"نام : {full_name}\n"
-            f"یوزرنیم : @{username}\n"
-            f"ایدی عددی : {chat_id}\n\n"
-            f"پلن : {plan['days']}\n"
-            f"قیمت : {plan['price']}\n"
+            f"<b>سفارش جدید</b>\n\n"
+            f"<b>نام : {full_name}</b>\n"
+            f"<b>یوزرنیم : @{username}</b>\n"
+            f"<b>ایدی عددی : {chat_id}</b>\n\n"
+            f"<b>پلن : {plan['days']}</b>\n"
+            f"<b>قیمت : {plan['price']}</b>\n"
         )
 
         try:
             bot.send_message(
                 ADMIN_ID, admin_text,
+                parse_mode="HTML",
                 reply_markup=admin_order_menu(chat_id, plan_key)
             )
         except Exception as e:
@@ -217,10 +354,11 @@ def handle_callback(call):
 
         try:
             bot.edit_message_text(
-                "سفارش شما برای بررسی به ادمین ارسال شد.\n"
-                "پس از تایید پرداخت، اشتراک شما فعال خواهد شد.",
+                "<b>سفارش شما برای بررسی به ادمین ارسال شد.</b>\n"
+                "<b>پس از تایید پرداخت، اشتراک شما فعال خواهد شد.</b>",
                 chat_id, msg_id,
-                reply_markup=back_menu("back_main")
+                reply_markup=back_menu("back_main"),
+                parse_mode="HTML"
             )
         except Exception:
             pass
@@ -231,7 +369,8 @@ def handle_callback(call):
         try:
             bot.edit_message_text(
                 WELCOME_TEXT, chat_id, msg_id,
-                reply_markup=main_menu()
+                reply_markup=main_menu(),
+                parse_mode="HTML"
             )
         except Exception:
             pass
@@ -239,10 +378,13 @@ def handle_callback(call):
 
     # --- بازگشت به منوی اصلی ---
     elif data == "back_main":
+        waiting_support.discard(chat_id)
+        waiting_card.discard(chat_id)
         try:
             bot.edit_message_text(
                 WELCOME_TEXT, chat_id, msg_id,
-                reply_markup=main_menu()
+                reply_markup=main_menu(),
+                parse_mode="HTML"
             )
         except Exception:
             pass
@@ -253,7 +395,8 @@ def handle_callback(call):
         try:
             bot.edit_message_text(
                 PRICES_TEXT, chat_id, msg_id,
-                reply_markup=plans_menu()
+                reply_markup=plans_menu(),
+                parse_mode="HTML"
             )
         except Exception:
             pass
@@ -274,21 +417,26 @@ def handle_callback(call):
             bot.answer_callback_query(call.id, "پلن نامعتبر")
             return
 
+        # اضافه کردن به لیست کاربران اشتراک دار
+        subscribed_users.add(target_id)
+
         try:
             bot.send_message(
                 target_id,
-                f"سفارش شما تایید شد.\n"
-                f"پلن : {plan['days']}\n"
-                f"اشتراک شما فعال شد."
+                f"<b>سفارش شما تایید شد.</b>\n"
+                f"<b>پلن : {plan['days']}</b>\n"
+                f"<b>اشتراک شما فعال شد.</b>",
+                parse_mode="HTML"
             )
         except Exception as e:
             print("User notify error:", e)
 
         try:
             bot.edit_message_text(
-                call.message.text + "\n\nتایید شد",
+                call.message.text + "\n\n<b>تایید شد</b>",
                 call.message.chat.id,
-                call.message.message_id
+                call.message.message_id,
+                parse_mode="HTML"
             )
         except Exception:
             pass
@@ -304,23 +452,46 @@ def handle_callback(call):
             bot.answer_callback_query(call.id, "داده نامعتبر")
             return
 
+        # حذف از لیست کاربران اشتراک دار
+        subscribed_users.discard(target_id)
+
         try:
             bot.send_message(
                 target_id,
-                "سفارش شما به علت عدم‌ پرداخت موجودی لغو شد"
+                "<b>سفارش شما به علت عدم‌ پرداخت موجودی لغو شد</b>",
+                parse_mode="HTML"
             )
         except Exception as e:
             print("User notify error:", e)
 
         try:
             bot.edit_message_text(
-                call.message.text + "\n\nرد شد",
+                call.message.text + "\n\n<b>رد شد</b>",
                 call.message.chat.id,
-                call.message.message_id
+                call.message.message_id,
+                parse_mode="HTML"
             )
         except Exception:
             pass
         bot.answer_callback_query(call.id, "رد شد")
+
+    # --- پاسخ به پشتیبانی (ادمین) ---
+    elif data.startswith("admin_reply_"):
+        try:
+            target_id = int(data[len("admin_reply_"):])
+        except Exception:
+            bot.answer_callback_query(call.id, "داده نامعتبر")
+            return
+
+        bot.answer_callback_query(call.id, "برای پاسخ، روی پیام کاربر ریپلای کنید")
+        try:
+            bot.send_message(
+                ADMIN_ID,
+                f"<b>برای پاسخ به کاربر {target_id}، روی پیام او ریپلای کنید.</b>",
+                parse_mode="HTML"
+            )
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
